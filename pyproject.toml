@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools", "torch"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mini-nccl"
+version = "0.0.1"
+description = "A from-scratch implementation of basic collective communication operations for a custom PyTorch distributed backend."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "numpy",
+    "torch",
+]
