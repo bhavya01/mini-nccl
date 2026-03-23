@@ -1,4 +1,5 @@
 #include "backend.h"
+#include "allgather.h"
 
 namespace c10d
 {
@@ -23,22 +24,30 @@ namespace c10d
         return future_;
     }
 
-    // If necessary, pass store/rank/size to the ctor and exchange connection
-    // information here
-    MiniNcclBackend::MiniNcclBackend(int rank, int size)
-        : Backend(rank, size) {}
+    MiniNcclBackend::MiniNcclBackend(int rank, int size,
+                                     c10::intrusive_ptr<::c10d::Store> store)
+        : Backend(rank, size), store_(std::move(store)) {}
 
     c10::intrusive_ptr<Work> MiniNcclBackend::allgather(
         std::vector<std::vector<at::Tensor>> &outputTensors,
         std::vector<at::Tensor> &inputTensors,
         const AllgatherOptions & /* unused */)
     {
-        for (auto &outputTensorVec : outputTensors)
+        TORCH_CHECK(inputTensors.size() == outputTensors.size(),
+            "allgather: inputTensors and outputTensors must have the same length");
+
+        // Each element of inputTensors is one tensor contributed by this rank.
+        // The matching outputTensors[i] is a size-length vector that receives
+        // every rank's contribution for that tensor.
+        for (size_t i = 0; i < inputTensors.size(); ++i)
         {
-            for (auto &outputTensor : outputTensorVec)
-            {
-                outputTensor.zero_();
-            }
+            mini_nccl::cuda_allgather(
+                store_,
+                rank_,
+                size_,
+                seq_.fetch_add(1, std::memory_order_relaxed),
+                inputTensors[i],
+                outputTensors[i]);
         }
 
         auto future = c10::make_intrusive<c10::ivalue::Future>(
@@ -69,7 +78,7 @@ namespace c10d
         int rank,
         int size,
         const std::chrono::duration<float> &timeout){
-        return c10::make_intrusive<MiniNcclBackend>(rank, size);
+        return c10::make_intrusive<MiniNcclBackend>(rank, size, store);
     }
 
     PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)

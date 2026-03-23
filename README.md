@@ -53,3 +53,11 @@ dist.init_process_group(backend="mini_nccl", ...)
 - Single-rack, all-to-all topology only — no hierarchical or multi-rack support.
 - CPU and GPU tensors supported; GPU paths use basic CUDA P2P transfers.
 - Not optimized for throughput; intended for learning and experimentation.
+
+
+## GPU topology
+
+Use the following command to check how your GPU's are organized
+```shell
+nvidia-smi topo -m
+```

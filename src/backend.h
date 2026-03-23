@@ -1,3 +1,5 @@
+#pragma once
+
 #include <torch/python.h>
 
 #include <torch/csrc/distributed/c10d/Backend.hpp>
@@ -8,23 +10,30 @@
 
 #include <pybind11/chrono.h>
 
-namespace c10d {
+#include <atomic>
+#include <cstdint>
 
-// MiniNcclWork represents a single collective operation submitted to the
-// mini-nccl backend. It wraps a Future that resolves when the operation
-// completes, and exposes the standard Work interface that torch.distributed
-// uses to query status and block on completion.
-class MiniNcclWork : public Work {
+namespace c10d
+{
+
+  // MiniNcclWork represents a single collective operation submitted to the
+  // mini-nccl backend. It wraps a Future that resolves when the operation
+  // completes, and exposes the standard Work interface that torch.distributed
+  // uses to query status and block on completion.
+  class MiniNcclWork : public Work
+  {
   public:
     // Constructs a work item for the given collective op type.
     // future: resolves to the output tensor(s) once the operation finishes.
     MiniNcclWork(
-      OpType opType,
-      c10::intrusive_ptr<c10::ivalue::Future> future)
-      : Work(
-          -1, // rank, only used by recvAnySource — not applicable here
-          opType),
-      future_(std::move(future)) {}
+        OpType opType,
+        c10::intrusive_ptr<c10::ivalue::Future> future)
+        : Work(
+              -1, // rank, only used by recvAnySource — not applicable here
+              opType),
+          future_(std::move(future))
+    {
+    }
 
     // Returns true if the underlying future has been resolved (op finished).
     bool isCompleted() override;
@@ -42,51 +51,60 @@ class MiniNcclWork : public Work {
 
   private:
     c10::intrusive_ptr<c10::ivalue::Future> future_;
-};
+  };
 
-// MiniNcclBackend is the custom torch.distributed ProcessGroup backend for
-// mini-nccl. It targets a single rack of GPUs connected in an all-to-all
-// topology and implements collectives as direct point-to-point exchanges
-// between ranks — no ring or tree algorithms are needed.
-//
-// Collective APIs that are not yet implemented will throw an error at runtime
-// if invoked by application code.
-class MiniNcclBackend : public Backend {
+  // MiniNcclBackend is the custom torch.distributed ProcessGroup backend for
+  // mini-nccl. It targets a single rack of GPUs connected in an all-to-all
+  // topology and implements collectives as direct point-to-point exchanges
+  // between ranks — no ring or tree algorithms are needed.
+  //
+  // Collective APIs that are not yet implemented will throw an error at runtime
+  // if invoked by application code.
+  class MiniNcclBackend : public Backend
+  {
   public:
     // Initializes the backend for a process group of `size` ranks where this
-    // process is `rank`.
-    MiniNcclBackend(int rank, int size);
+    // process is `rank`. store is used for rendezvous during collectives.
+    MiniNcclBackend(int rank, int size,
+                    c10::intrusive_ptr<::c10d::Store> store);
 
     // All-Gather: each rank contributes its inputTensor and receives the full
     // list of tensors from all ranks in outputTensors.
     c10::intrusive_ptr<Work> allgather(
-        std::vector<std::vector<at::Tensor>>& outputTensors,
-        std::vector<at::Tensor>& inputTensors,
-        const AllgatherOptions& opts = AllgatherOptions()) override;
+        std::vector<std::vector<at::Tensor>> &outputTensors,
+        std::vector<at::Tensor> &inputTensors,
+        const AllgatherOptions &opts = AllgatherOptions()) override;
 
     // All-Reduce: applies a reduction op (e.g. sum) across all ranks' tensors
     // in-place so every rank ends up with the same reduced result.
     c10::intrusive_ptr<Work> allreduce(
-        std::vector<at::Tensor>& tensors,
-        const AllreduceOptions& opts = AllreduceOptions()) override;
-    
+        std::vector<at::Tensor> &tensors,
+        const AllreduceOptions &opts = AllreduceOptions()) override;
+
     static c10::intrusive_ptr<Backend> createMiniNcclBackend(
-      const c10::intrusive_ptr<::c10d::Store>& store,
-      int rank,
-      int size,
-      const std::chrono::duration<float>& timeout);
+        const c10::intrusive_ptr<::c10d::Store> &store,
+        int rank,
+        int size,
+        const std::chrono::duration<float> &timeout);
 
     // __attribute__((constructor)) is a compiler-specific instruction (GCC/Clang).
     // It tells the system to execute this function automatically as soon as the
     // shared library is loaded into memory.
-    static void RegisterMiniNcclBackend() __attribute__((constructor)) {
+    static void RegisterMiniNcclBackend() __attribute__((constructor))
+    {
       py::object module = py::module::import("torch.distributed");
       py::object register_backend =
           module.attr("Backend").attr("register_backend");
       register_backend("mini_nccl", py::cpp_function(createMiniNcclBackend),
                        py::arg("extended_api") = false,
                        py::arg("devices") = "cuda");
-  }
-};
+    }
+
+  private:
+    c10::intrusive_ptr<::c10d::Store> store_;
+    // Monotonically increasing counter; gives each collective call a unique
+    // set of store keys so concurrent or back-to-back calls don't collide.
+    std::atomic<uint64_t> seq_{0};
+  };
 
 } // namespace c10d
