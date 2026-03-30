@@ -81,6 +81,13 @@ namespace c10d
         std::vector<at::Tensor> &tensors,
         const AllreduceOptions &opts = AllreduceOptions()) override;
 
+    // Reduce-Scatter: each rank contributes world_size chunks via inputTensors;
+    // rank r receives the reduction of chunk r from all ranks in outputTensors.
+    c10::intrusive_ptr<Work> reduce_scatter(
+        std::vector<at::Tensor> &outputTensors,
+        std::vector<std::vector<at::Tensor>> &inputTensors,
+        const ReduceScatterOptions &opts = ReduceScatterOptions()) override;
+
     static c10::intrusive_ptr<Backend> createMiniNcclBackend(
         const c10::intrusive_ptr<::c10d::Store> &store,
         int rank,
