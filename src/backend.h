@@ -88,6 +88,17 @@ namespace c10d
         std::vector<std::vector<at::Tensor>> &inputTensors,
         const ReduceScatterOptions &opts = ReduceScatterOptions()) override;
 
+    // All-to-All: each rank splits its inputTensor into world_size equal chunks
+    // and sends chunk s to rank s.  Rank s places the received data in the
+    // corresponding slot of its outputTensor.  Concretely, after the call:
+    //   outputTensor[chunk r] == rank r's inputTensor[chunk this_rank]
+    c10::intrusive_ptr<Work> alltoall_base(
+        at::Tensor &outputTensor,
+        at::Tensor &inputTensor,
+        std::vector<int64_t> &outputSplitSizes,
+        std::vector<int64_t> &inputSplitSizes,
+        const AllToAllOptions &opts = AllToAllOptions()) override;
+
     static c10::intrusive_ptr<Backend> createMiniNcclBackend(
         const c10::intrusive_ptr<::c10d::Store> &store,
         int rank,

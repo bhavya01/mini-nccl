@@ -2,6 +2,7 @@
 #include "allgather.h"
 #include "allreduce.h"
 #include "reduce_scatter.h"
+#include "alltoall.h"
 
 namespace c10d
 {
@@ -103,6 +104,47 @@ namespace c10d
             c10::ListType::create(c10::TensorType::get()));
         future->markCompleted(c10::IValue(outputTensors));
         return c10::make_intrusive<MiniNcclWork>(OpType::REDUCE_SCATTER, std::move(future));
+    }
+
+    c10::intrusive_ptr<Work> MiniNcclBackend::alltoall_base(
+        at::Tensor &outputTensor,
+        at::Tensor &inputTensor,
+        std::vector<int64_t> &outputSplitSizes,
+        std::vector<int64_t> &inputSplitSizes,
+        const AllToAllOptions & /* unused */)
+    {
+        // Only equal-split all-to-all is supported: every rank contributes and
+        // receives chunks of the same size.  Non-empty split-size vectors that
+        // specify unequal splits are rejected.
+        auto is_equal_split = [&](const std::vector<int64_t> &sizes, int64_t total) {
+            if (sizes.empty())
+                return true;
+            int64_t expected = total / size_;
+            for (int64_t s : sizes)
+            {
+                if (s != expected)
+                    return false;
+            }
+            return true;
+        };
+
+        TORCH_CHECK(is_equal_split(inputSplitSizes, inputTensor.size(0)),
+                    "alltoall_base: only equal input splits are supported");
+        TORCH_CHECK(is_equal_split(outputSplitSizes, outputTensor.size(0)),
+                    "alltoall_base: only equal output splits are supported");
+
+        mini_nccl::cuda_alltoall(
+            store_,
+            rank_,
+            size_,
+            seq_.fetch_add(1, std::memory_order_relaxed),
+            inputTensor,
+            outputTensor);
+
+        auto future = c10::make_intrusive<c10::ivalue::Future>(
+            c10::TensorType::get());
+        future->markCompleted(c10::IValue(outputTensor));
+        return c10::make_intrusive<MiniNcclWork>(OpType::ALLTOALL_BASE, std::move(future));
     }
 
     c10::intrusive_ptr<Backend> MiniNcclBackend::createMiniNcclBackend(

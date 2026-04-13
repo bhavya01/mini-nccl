@@ -3,7 +3,7 @@ import torch
 from setuptools import setup
 from torch.utils import cpp_extension
 
-sources = ["src/backend.cpp", "src/allgather.cu", "src/allreduce.cu", "src/reduce_scatter.cu"]
+sources = ["src/backend.cpp", "src/allgather.cu", "src/allreduce.cu", "src/reduce_scatter.cu", "src/alltoall.cu"]
 include_dirs = [f"{os.path.dirname(os.path.abspath(__file__))}/src/"]
 
 if torch.cuda.is_available():
