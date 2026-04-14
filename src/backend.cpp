@@ -3,6 +3,10 @@
 #include "allreduce.h"
 #include "reduce_scatter.h"
 #include "alltoall.h"
+#include "scatter.h"
+#include "gather.h"
+#include "broadcast.h"
+#include "reduce.h"
 
 namespace c10d
 {
@@ -145,6 +149,137 @@ namespace c10d
             c10::TensorType::get());
         future->markCompleted(c10::IValue(outputTensor));
         return c10::make_intrusive<MiniNcclWork>(OpType::ALLTOALL_BASE, std::move(future));
+    }
+
+    c10::intrusive_ptr<Work> MiniNcclBackend::broadcast(
+        std::vector<at::Tensor> &tensors,
+        const BroadcastOptions &opts)
+    {
+        for (auto &tensor : tensors)
+        {
+            mini_nccl::cuda_broadcast(
+                store_,
+                rank_,
+                size_,
+                seq_.fetch_add(1, std::memory_order_relaxed),
+                tensor,
+                opts.rootRank);
+        }
+
+        auto future = c10::make_intrusive<c10::ivalue::Future>(
+            c10::ListType::create(c10::TensorType::get()));
+        future->markCompleted(c10::IValue(tensors));
+        return c10::make_intrusive<MiniNcclWork>(OpType::BROADCAST, std::move(future));
+    }
+
+    c10::intrusive_ptr<Work> MiniNcclBackend::reduce(
+        std::vector<at::Tensor> &tensors,
+        const ReduceOptions &opts)
+    {
+        for (auto &tensor : tensors)
+        {
+            mini_nccl::cuda_reduce(
+                store_,
+                rank_,
+                size_,
+                seq_.fetch_add(1, std::memory_order_relaxed),
+                tensor,
+                opts.rootRank,
+                opts.reduceOp);
+        }
+
+        auto future = c10::make_intrusive<c10::ivalue::Future>(
+            c10::ListType::create(c10::TensorType::get()));
+        future->markCompleted(c10::IValue(tensors));
+        return c10::make_intrusive<MiniNcclWork>(OpType::REDUCE, std::move(future));
+    }
+
+    c10::intrusive_ptr<Work> MiniNcclBackend::scatter(
+        std::vector<at::Tensor> &outputTensors,
+        std::vector<std::vector<at::Tensor>> &inputTensors,
+        const ScatterOptions &opts)
+    {
+        // PyTorch always passes outputTensors = [output_tensor] (length 1).
+        // inputTensors = [world_size_chunks] on root (length 1), [] on non-root.
+        TORCH_CHECK(outputTensors.size() == 1,
+            "scatter: expected exactly one output tensor per rank");
+
+        std::vector<at::Tensor> root_inputs;
+        if (rank_ == opts.rootRank)
+        {
+            TORCH_CHECK(inputTensors.size() == 1,
+                "scatter: root must provide exactly one input tensor group");
+            root_inputs = inputTensors[0];
+        }
+
+        mini_nccl::cuda_scatter(
+            store_,
+            rank_,
+            size_,
+            seq_.fetch_add(1, std::memory_order_relaxed),
+            outputTensors[0],
+            root_inputs,
+            opts.rootRank);
+
+        auto future = c10::make_intrusive<c10::ivalue::Future>(
+            c10::ListType::create(c10::TensorType::get()));
+        future->markCompleted(c10::IValue(outputTensors));
+        return c10::make_intrusive<MiniNcclWork>(OpType::SCATTER, std::move(future));
+    }
+
+    c10::intrusive_ptr<Work> MiniNcclBackend::gather(
+        std::vector<std::vector<at::Tensor>> &outputTensors,
+        std::vector<at::Tensor> &inputTensors,
+        const GatherOptions &opts)
+    {
+        // PyTorch always passes inputTensors = [input_tensor] (length 1).
+        // outputTensors = [world_size_slots] on root (length 1), [] on non-root.
+        TORCH_CHECK(inputTensors.size() == 1,
+            "gather: expected exactly one input tensor per rank");
+
+        std::vector<at::Tensor> root_outputs;
+        if (rank_ == opts.rootRank)
+        {
+            TORCH_CHECK(outputTensors.size() == 1,
+                "gather: root must provide exactly one output tensor group");
+            root_outputs = outputTensors[0];
+        }
+
+        mini_nccl::cuda_gather(
+            store_,
+            rank_,
+            size_,
+            seq_.fetch_add(1, std::memory_order_relaxed),
+            root_outputs,
+            inputTensors[0],
+            opts.rootRank);
+
+        auto future = c10::make_intrusive<c10::ivalue::Future>(
+            c10::ListType::create(c10::ListType::create(c10::TensorType::get())));
+        future->markCompleted(c10::IValue(outputTensors));
+        return c10::make_intrusive<MiniNcclWork>(OpType::GATHER, std::move(future));
+    }
+
+    c10::intrusive_ptr<Work> MiniNcclBackend::barrier(
+        const BarrierOptions & /* unused */)
+    {
+        // Pure store-based barrier: no CUDA work, no data transfer.
+        // Each rank writes a signal; all ranks wait until every signal is present.
+        const std::string pfx =
+            "barrier_" + std::to_string(seq_.fetch_add(1, std::memory_order_relaxed)) + "_";
+
+        const std::vector<uint8_t> signal = {1};
+        store_->set(pfx + std::to_string(rank_), signal);
+
+        std::vector<std::string> keys;
+        keys.reserve(size_);
+        for (int r = 0; r < size_; ++r)
+            keys.push_back(pfx + std::to_string(r));
+        store_->wait(keys);
+
+        auto future = c10::make_intrusive<c10::ivalue::Future>(c10::NoneType::get());
+        future->markCompleted(c10::IValue());
+        return c10::make_intrusive<MiniNcclWork>(OpType::BARRIER, std::move(future));
     }
 
     c10::intrusive_ptr<Backend> MiniNcclBackend::createMiniNcclBackend(

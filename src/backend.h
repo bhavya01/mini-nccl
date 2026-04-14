@@ -99,6 +99,37 @@ namespace c10d
         std::vector<int64_t> &inputSplitSizes,
         const AllToAllOptions &opts = AllToAllOptions()) override;
 
+    // Broadcast: root's tensors[0] is copied to every rank so all end up
+    // with the same data.
+    c10::intrusive_ptr<Work> broadcast(
+        std::vector<at::Tensor> &tensors,
+        const BroadcastOptions &opts = BroadcastOptions()) override;
+
+    // Reduce: all ranks contribute tensors[0]; only root's tensor holds the
+    // reduced result after the call.
+    c10::intrusive_ptr<Work> reduce(
+        std::vector<at::Tensor> &tensors,
+        const ReduceOptions &opts = ReduceOptions()) override;
+
+    // Scatter: the root rank sends inputTensors[r] to rank r.  Every rank
+    // receives exactly one tensor in outputTensors[0].
+    c10::intrusive_ptr<Work> scatter(
+        std::vector<at::Tensor> &outputTensors,
+        std::vector<std::vector<at::Tensor>> &inputTensors,
+        const ScatterOptions &opts = ScatterOptions()) override;
+
+    // Gather: every rank sends inputTensors[0] to the root.  The root
+    // collects all contributions into outputTensors[0][r] for rank r.
+    c10::intrusive_ptr<Work> gather(
+        std::vector<std::vector<at::Tensor>> &outputTensors,
+        std::vector<at::Tensor> &inputTensors,
+        const GatherOptions &opts = GatherOptions()) override;
+
+    // Barrier: blocks until every rank in the group has called barrier().
+    // No data is transferred; synchronisation is done entirely via the store.
+    c10::intrusive_ptr<Work> barrier(
+        const BarrierOptions &opts = BarrierOptions()) override;
+
     static c10::intrusive_ptr<Backend> createMiniNcclBackend(
         const c10::intrusive_ptr<::c10d::Store> &store,
         int rank,
