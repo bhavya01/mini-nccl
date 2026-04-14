@@ -35,9 +35,11 @@ The backend plugs into PyTorch's `torch.distributed` API by implementing a custo
 
 ```bash
 pip install torch
-git clone <this repo>
+git clone https://github.com/bhavya01/mini-nccl.git
 cd mini-nccl
 ```
+
+Try out your first collective by running `uv run examples/allreduce.py`.
 
 Register the backend and initialize a process group:
 
